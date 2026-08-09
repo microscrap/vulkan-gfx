@@ -1,0 +1,654 @@
+<?php
+
+namespace Microscrap\GFX\Vulkan;
+
+use Microscrap\Bindings\GLFW\DataObjects\GlfwWindow;
+use Microscrap\Bindings\GLFW\Window;
+use Microscrap\Bindings\Vulkan\DataObjects\VkInstance;
+use Microscrap\Bindings\Vulkan\DataObjects\VkSwapchain;
+use Microscrap\Bindings\Vulkan\Enums\VkResult;
+use Microscrap\Bindings\Vulkan\Vk;
+use ScrapyardIO\Tubes\Contracts\Framebuffers\DamageGranularity;
+use ScrapyardIO\Tubes\Contracts\Framebuffers\DumpedBuffer;
+use ScrapyardIO\Tubes\Contracts\Framebuffers\Enums\BitDepth;
+use ScrapyardIO\Tubes\Contracts\Framebuffers\Enums\Endianness;
+use ScrapyardIO\Tubes\Contracts\Framebuffers\Enums\PixelFormat;
+use ScrapyardIO\Tubes\Contracts\Framebuffers\Enums\RenderType;
+use ScrapyardIO\Tubes\Contracts\Framebuffers\FormatSpec;
+use ScrapyardIO\Tubes\Framebuffers\DeferredFramebuffer;
+
+/**
+ * Deferred Vulkan-handled framebuffer.
+ *
+ * Headless {@see sized()}: owns a VkInstance + CPU shadow (ext-vulkan 0.7 has no
+ * offscreen image/readback yet). Windowed {@see attachedTo()}: borrows GLFW window
+ * + swapchain; {@see present()} prefers {@see Vk::presentRgba8()} (full CPU shadow)
+ * and falls back to {@see Vk::presentFrame()} (clear + ≤3 rects) on older builds.
+ */
+class VulkanHandledFramebuffer extends DeferredFramebuffer
+{
+    protected ?VkInstance $instance = null;
+
+    protected bool $owns_instance = true;
+
+    protected ?GlfwWindow $native_window = null;
+
+    protected ?VkSwapchain $swapchain = null;
+
+    /** @var array<int, int> logical pixel colors (0xRRGGBBAA) */
+    protected array $shadow = [];
+
+    /** Last fill color used as presentFrame clear (0xRRGGBBAA). */
+    protected int $clear_color = 0;
+
+    /**
+     * Legacy FIFO hint from setSegment/setPixel (present prefers shadow coalesce).
+     *
+     * @var list<array{x: int, y: int, w: int, h: int, color: int}>
+     */
+    protected array $present_ops = [];
+
+    /**
+     * @throws VulkanGfxException
+     */
+    public function __construct(
+        int $width,
+        int $height,
+        FormatSpec $format_spec,
+        ?VkInstance $instance = null,
+        ?GlfwWindow $attach_to = null,
+        ?VkSwapchain $swapchain = null,
+        bool $owns_instance = true,
+    ) {
+        parent::__construct($width, $height, $format_spec);
+
+        if ($width <= 0 || $height <= 0) {
+            throw new VulkanGfxException("VulkanHandledFramebuffer size must be positive, got {$width}x{$height}.");
+        }
+
+        $this->shadow = array_fill(0, $width * $height, 0);
+        $this->native_window = $attach_to;
+        $this->swapchain = $swapchain;
+        $this->owns_instance = $owns_instance;
+
+        if (! is_null($attach_to)) {
+            if (is_null($swapchain) || ! $swapchain->isValid()) {
+                throw new VulkanGfxException(
+                    'VulkanHandledFramebuffer::attachedTo() requires a valid VkSwapchain.'
+                );
+            }
+
+            // Window path borrows instance from the handler (destroyed after FB is dropped).
+            $this->instance = $instance;
+
+            return;
+        }
+
+        if (! is_null($instance)) {
+            $this->instance = $instance;
+
+            return;
+        }
+
+        if (! extension_loaded('vulkan')) {
+            throw VulkanGfxException::instanceCreationFailed('ext-vulkan is not loaded');
+        }
+
+        $created = Vk::createInstance([], 'microscrap/vulkan-gfx');
+        if (! $created->isValid()) {
+            throw VulkanGfxException::instanceCreationFailed(Vk::lastError());
+        }
+
+        $this->instance = $created;
+        $this->owns_instance = true;
+    }
+
+    public function __destruct()
+    {
+        $this->swapchain = null;
+        $this->native_window = null;
+
+        if ($this->owns_instance && ! is_null($this->instance) && $this->instance->isValid()) {
+            Vk::destroyInstance($this->instance);
+        }
+
+        $this->instance = null;
+    }
+
+    /**
+     * Headless factory: VkInstance + CPU shadow canvas (no window).
+     *
+     * @throws VulkanGfxException
+     */
+    public static function sized(int $width, int $height, FormatSpec $host_format): static
+    {
+        return new static($width, $height, $host_format);
+    }
+
+    /**
+     * Window-bound factory: borrows GLFW window + swapchain owned by {@see VulkanWindowHandler}.
+     *
+     * @throws VulkanGfxException
+     */
+    public static function attachedTo(
+        GlfwWindow $window,
+        FormatSpec $format_spec,
+        int $width,
+        int $height,
+        VkSwapchain $swapchain,
+    ): static {
+        return new static(
+            $width,
+            $height,
+            $format_spec,
+            instance: null,
+            attach_to: $window,
+            swapchain: $swapchain,
+            owns_instance: false,
+        );
+    }
+
+    public static function rgbaSpec(): FormatSpec
+    {
+        return new FormatSpec(PixelFormat::ROW_MAJOR, BitDepth::B32, endianness: Endianness::MSB);
+    }
+
+    public function vkInstance(): ?VkInstance
+    {
+        return $this->instance;
+    }
+
+    public function nativeWindow(): ?GlfwWindow
+    {
+        return $this->native_window;
+    }
+
+    public function vkSwapchain(): ?VkSwapchain
+    {
+        return $this->swapchain;
+    }
+
+    public function isHeadless(): bool
+    {
+        return is_null($this->native_window);
+    }
+
+    /**
+     * Engine clear of the CPU shadow (and present clear color when windowed).
+     */
+    public function fill(int $color): static
+    {
+        $this->shadow = array_fill(0, $this->width * $this->height, $color);
+        $this->clear_color = $color;
+        $this->present_ops = [];
+
+        return $this;
+    }
+
+    /**
+     * Headless: no-op. Windowed: presentRgba8 when available, else ≤3-rect presentFrame.
+     *
+     * @throws VulkanGfxException
+     */
+    public function present(): static
+    {
+        if ($this->isHeadless()) {
+            return $this;
+        }
+
+        if (is_null($this->swapchain) || ! $this->swapchain->isValid()) {
+            throw new VulkanGfxException('VulkanHandledFramebuffer::present() has no valid swapchain.');
+        }
+
+        if (is_null($this->native_window)) {
+            throw new VulkanGfxException('VulkanHandledFramebuffer::present() has no native window.');
+        }
+
+        [$scaleX, $scaleY] = $this->contentScale();
+        [$cr, $cg, $cb, $ca] = $this->rgbaFloats($this->clear_color);
+
+        // Prefer full-shadow present (glyphs + circles). Falls back to ≤3 AABB rects
+        // on older ext-vulkan builds without presentRgba8.
+        if (method_exists(\Vulkan\Vk\Vk::class, 'presentRgba8')) {
+            $pixels = $this->packRgba8Shadow();
+            $rc = Vk::presentRgba8(
+                $this->swapchain,
+                $pixels,
+                $this->width,
+                $this->height,
+                $scaleX,
+                $scaleY,
+                $cr,
+                $cg,
+                $cb,
+                $ca,
+            );
+        } else {
+            $ops = $this->presentOpsFromShadow();
+            $menu = $this->scaledOp($ops[0] ?? null, $scaleX, $scaleY);
+            $inner = $this->scaledOp($ops[1] ?? null, $scaleX, $scaleY);
+            $accent = $this->scaledOp($ops[2] ?? null, $scaleX, $scaleY);
+
+            $rc = Vk::presentFrame(
+                $this->swapchain,
+                $cr,
+                $cg,
+                $cb,
+                $ca,
+                $menu['draw'],
+                $menu['x'],
+                $menu['y'],
+                $menu['w'],
+                $menu['h'],
+                $menu['r'],
+                $menu['g'],
+                $menu['b'],
+                $menu['a'],
+                $inner['draw'],
+                $inner['x'],
+                $inner['y'],
+                $inner['w'],
+                $inner['h'],
+                $inner['r'],
+                $inner['g'],
+                $inner['b'],
+                $inner['a'],
+                $accent['draw'],
+                $accent['x'],
+                $accent['y'],
+                $accent['w'],
+                $accent['h'],
+                $accent['r'],
+                $accent['g'],
+                $accent['b'],
+                $accent['a'],
+            );
+        }
+
+        if ($rc === VkResult::ERROR_OUT_OF_DATE_KHR->value || $rc === VkResult::SUBOPTIMAL_KHR->value) {
+            $fb = Window::getFramebufferSize($this->native_window);
+            Vk::resizeSwapchain(
+                $this->swapchain,
+                max(1, (int) ($fb['width'] ?? $this->width)),
+                max(1, (int) ($fb['height'] ?? $this->height)),
+            );
+
+            return $this;
+        }
+
+        if ($rc !== VkResult::SUCCESS->value) {
+            throw new VulkanGfxException(
+                'Vk::presentFrame failed: result='.$rc.' '.Vk::lastError()
+            );
+        }
+
+        return $this;
+    }
+
+    public function getPixel(int $x, int $y): int
+    {
+        if (($x < 0) || ($y < 0) || ($x >= $this->width) || ($y >= $this->height)) {
+            return 0;
+        }
+
+        return $this->shadow[($y * $this->width) + $x] ?? 0;
+    }
+
+    public function setPixel(int $x, int $y, int $value): static
+    {
+        if (($x < 0) || ($y < 0) || ($x >= $this->width) || ($y >= $this->height)) {
+            return $this;
+        }
+
+        $this->shadow[($y * $this->width) + $x] = $value;
+        $this->queuePresentOp($x, $y, 1, 1, $value);
+
+        return $this;
+    }
+
+    public function setSegment(int $x, int $y, int $width, int $height, int $color): static
+    {
+        if (($width <= 0) || ($height <= 0)) {
+            return $this;
+        }
+
+        $x1 = min($this->width, $x + $width);
+        $y1 = min($this->height, $y + $height);
+        $x0 = max(0, $x);
+        $y0 = max(0, $y);
+        $cw = $x1 - $x0;
+        $ch = $y1 - $y0;
+
+        if ($cw <= 0 || $ch <= 0) {
+            return $this;
+        }
+
+        for ($py = $y0; $py < $y1; $py++) {
+            for ($px = $x0; $px < $x1; $px++) {
+                $this->shadow[($py * $this->width) + $px] = $color;
+            }
+        }
+
+        $this->queuePresentOp($x0, $y0, $cw, $ch, $color);
+
+        return $this;
+    }
+
+    public function dump(?int $layer = null): string
+    {
+        return $this->packViaPixels($this->host_format);
+    }
+
+    /**
+     * @return string|array<int, DumpedBuffer|int>
+     */
+    public function flush(FormatSpec $spec, bool $as_array = false): string|array
+    {
+        $bytes = $this->packViaPixels($spec);
+
+        if (! $as_array) {
+            return $bytes;
+        }
+
+        return [
+            new DumpedBuffer(
+                RenderType::FULL,
+                $spec,
+                $bytes,
+                width: $this->width,
+                height: $this->height,
+            ),
+        ];
+    }
+
+    public function damageGranularity(): DamageGranularity
+    {
+        return DamageGranularity::wholeSurface($this->width, $this->height);
+    }
+
+    public function preservesContentsOnPresent(): bool
+    {
+        // presentFrame clears each frame; queued rects are not a retained GPU store.
+        return false;
+    }
+
+    /**
+     * @return array{0: float, 1: float}
+     */
+    protected function contentScale(): array
+    {
+        $fb = Window::getFramebufferSize($this->native_window);
+        $fbW = max(1, (int) ($fb['width'] ?? $this->width));
+        $fbH = max(1, (int) ($fb['height'] ?? $this->height));
+
+        return [
+            $fbW / max(1, $this->width),
+            $fbH / max(1, $this->height),
+        ];
+    }
+
+    /**
+     * @param  array{x: int, y: int, w: int, h: int, color: int}|null  $op
+     * @return array{draw: bool, x: int, y: int, w: int, h: int, r: float, g: float, b: float, a: float}
+     */
+    protected function scaledOp(?array $op, float $scaleX, float $scaleY): array
+    {
+        if (is_null($op)) {
+            return [
+                'draw' => false,
+                'x' => 0,
+                'y' => 0,
+                'w' => 0,
+                'h' => 0,
+                'r' => 0.0,
+                'g' => 0.0,
+                'b' => 0.0,
+                'a' => 1.0,
+            ];
+        }
+
+        [$r, $g, $b, $a] = $this->rgbaFloats($op['color']);
+
+        return [
+            'draw' => true,
+            'x' => (int) round($op['x'] * $scaleX),
+            'y' => (int) round($op['y'] * $scaleY),
+            'w' => max(1, (int) round($op['w'] * $scaleX)),
+            'h' => max(1, (int) round($op['h'] * $scaleY)),
+            'r' => $r,
+            'g' => $g,
+            'b' => $b,
+            'a' => $a,
+        ];
+    }
+
+    protected function queuePresentOp(int $x, int $y, int $w, int $h, int $color): void
+    {
+        if ($this->isHeadless()) {
+            return;
+        }
+
+        // Fast-path hint only; present() prefers presentOpsFromShadow().
+        if (count($this->present_ops) >= 3) {
+            array_shift($this->present_ops);
+        }
+
+        $this->present_ops[] = [
+            'x' => $x,
+            'y' => $y,
+            'w' => $w,
+            'h' => $h,
+            'color' => $color,
+        ];
+    }
+
+    /**
+     * Coalesce non-clear shadow pixels into ≤3 presentFrame rects.
+     *
+     * Groups by color (pixel count desc). Skips a region whose AABB is mostly
+     * inside an already-chosen larger region so a sparse outline (e.g. white
+     * drawCircle) does not paint over a filled circle as a solid white square.
+     *
+     * @return list<array{x: int, y: int, w: int, h: int, color: int}>
+     */
+    protected function presentOpsFromShadow(): array
+    {
+        $clear = $this->clear_color;
+        /** @var array<int, array{count: int, x0: int, y0: int, x1: int, y1: int}> $regions */
+        $regions = [];
+
+        $w = $this->width;
+        $h = $this->height;
+
+        for ($y = 0; $y < $h; $y++) {
+            $row = $y * $w;
+            for ($x = 0; $x < $w; $x++) {
+                $color = $this->shadow[$row + $x] ?? 0;
+                if ($color === $clear) {
+                    continue;
+                }
+
+                if (! isset($regions[$color])) {
+                    $regions[$color] = [
+                        'count' => 0,
+                        'x0' => $x,
+                        'y0' => $y,
+                        'x1' => $x,
+                        'y1' => $y,
+                    ];
+                }
+
+                $region = &$regions[$color];
+                $region['count']++;
+                $region['x0'] = min($region['x0'], $x);
+                $region['y0'] = min($region['y0'], $y);
+                $region['x1'] = max($region['x1'], $x);
+                $region['y1'] = max($region['y1'], $y);
+                unset($region);
+            }
+        }
+
+        if ($regions === []) {
+            return [];
+        }
+
+        uasort(
+            $regions,
+            static fn (array $a, array $b): int => $b['count'] <=> $a['count'],
+        );
+
+        $ops = [];
+        /** @var list<array{x0: int, y0: int, x1: int, y1: int}> $chosenBounds */
+        $chosenBounds = [];
+
+        foreach ($regions as $color => $region) {
+            if (count($ops) >= 3) {
+                break;
+            }
+
+            $aabbArea = ($region['x1'] - $region['x0'] + 1) * ($region['y1'] - $region['y0'] + 1);
+            $density = $region['count'] / max(1, $aabbArea);
+
+            $skip = false;
+            foreach ($chosenBounds as $bound) {
+                // Nested outline (drawCircle) shares nearly the same AABB as a
+                // fill but is sparse — do not paint it as a solid covering rect.
+                if ($this->aabbContainedFraction($region, $bound) >= 0.85) {
+                    $skip = true;
+                    break;
+                }
+
+                if ($density < 0.25 && $this->aabbIntersects($region, $bound)) {
+                    $skip = true;
+                    break;
+                }
+            }
+
+            if ($skip) {
+                continue;
+            }
+
+            $ops[] = [
+                'x' => $region['x0'],
+                'y' => $region['y0'],
+                'w' => $region['x1'] - $region['x0'] + 1,
+                'h' => $region['y1'] - $region['y0'] + 1,
+                'color' => (int) $color,
+            ];
+            $chosenBounds[] = [
+                'x0' => $region['x0'],
+                'y0' => $region['y0'],
+                'x1' => $region['x1'],
+                'y1' => $region['y1'],
+            ];
+        }
+
+        return $ops;
+    }
+
+    /**
+     * @param  array{x0: int, y0: int, x1: int, y1: int}  $a
+     * @param  array{x0: int, y0: int, x1: int, y1: int}  $b
+     */
+    protected function aabbIntersects(array $a, array $b): bool
+    {
+        return $a['x0'] <= $b['x1']
+            && $a['x1'] >= $b['x0']
+            && $a['y0'] <= $b['y1']
+            && $a['y1'] >= $b['y0'];
+    }
+
+    /**
+     * @param  array{x0: int, y0: int, x1: int, y1: int}  $inner
+     * @param  array{x0: int, y0: int, x1: int, y1: int}  $outer
+     */
+    protected function aabbContainedFraction(array $inner, array $outer): float
+    {
+        $ix0 = max($inner['x0'], $outer['x0']);
+        $iy0 = max($inner['y0'], $outer['y0']);
+        $ix1 = min($inner['x1'], $outer['x1']);
+        $iy1 = min($inner['y1'], $outer['y1']);
+
+        if ($ix1 < $ix0 || $iy1 < $iy0) {
+            return 0.0;
+        }
+
+        $inter = ($ix1 - $ix0 + 1) * ($iy1 - $iy0 + 1);
+        $area = ($inner['x1'] - $inner['x0'] + 1) * ($inner['y1'] - $inner['y0'] + 1);
+
+        if ($area <= 0) {
+            return 0.0;
+        }
+
+        return $inter / $area;
+    }
+
+    /**
+     * Pack the CPU shadow as tightly packed RGBA8 (R,G,B,A per pixel).
+     */
+    /**
+     * Pack shadow ints (0xRRGGBBAA) to RGBA8 bytes for {@see Vk::presentRgba8()}.
+     *
+     * Uses {@see pack()} — per-pixel string concat was tens of ms at 800×600 and
+     * combined with FIFO VSync locked MetalCanvas near ~30fps.
+     */
+    protected function packRgba8Shadow(): string
+    {
+        $n = $this->width * $this->height;
+        if ($n < 1) {
+            return '';
+        }
+
+        // Big-endian uint32 == R,G,B,A byte order for 0xRRGGBBAA.
+        // Chunk to avoid enormous splat argument lists on large canvases.
+        $chunk = 16384;
+        if ($n <= $chunk) {
+            return pack('N*', ...$this->shadow);
+        }
+
+        $bytes = '';
+        for ($i = 0; $i < $n; $i += $chunk) {
+            $bytes .= pack('N*', ...array_slice($this->shadow, $i, $chunk));
+        }
+
+        return $bytes;
+    }
+
+    /**
+     * Unpack 0xRRGGBBAA into float RGBA for presentFrame.
+     *
+     * @return array{0: float, 1: float, 2: float, 3: float}
+     */
+    protected function rgbaFloats(int $color): array
+    {
+        return [
+            (($color >> 24) & 0xFF) / 255.0,
+            (($color >> 16) & 0xFF) / 255.0,
+            (($color >> 8) & 0xFF) / 255.0,
+            ($color & 0xFF) / 255.0,
+        ];
+    }
+
+    protected function packViaPixels(FormatSpec $spec): string
+    {
+        $bytes = '';
+        for ($y = 0; $y < $this->height; $y++) {
+            for ($x = 0; $x < $this->width; $x++) {
+                $color = $this->getPixel($x, $y);
+                $bytes .= match ($spec->bit_depth) {
+                    BitDepth::B8 => chr($color & 0xFF),
+                    BitDepth::B16 => (($spec->endianness ?? Endianness::MSB) === Endianness::LSB)
+                        ? chr($color & 0xFF).chr(($color >> 8) & 0xFF)
+                        : chr(($color >> 8) & 0xFF).chr($color & 0xFF),
+                    BitDepth::B32 => chr(($color >> 24) & 0xFF)
+                        .chr(($color >> 16) & 0xFF)
+                        .chr(($color >> 8) & 0xFF)
+                        .chr($color & 0xFF),
+                    default => chr(($color >> 16) & 0xFF).chr(($color >> 8) & 0xFF).chr($color & 0xFF),
+                };
+            }
+        }
+
+        return $bytes;
+    }
+}

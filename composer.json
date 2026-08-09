@@ -1,0 +1,75 @@
+{
+    "name": "microscrap/vulkan-gfx",
+    "description": "VulkanEngine plugin for ScrapyardIO Tubes — DeferredFramebuffer, WindowHandler, Rendering Engine, and Input Handler.",
+    "license": "MIT",
+    "homepage": "https://scrapyard-io.projectsaturnstudios.com/ecosystem/microscrap/vulkan-gfx/0.7.x/overview",
+    "support": {
+        "docs": "https://scrapyard-io.projectsaturnstudios.com/ecosystem/microscrap/vulkan-gfx/0.7.x/overview",
+        "issues": "https://github.com/microscrap/vulkan-gfx/issues",
+        "source": "https://github.com/microscrap/vulkan-gfx"
+    },
+    "version": "0.7.0",
+    "authors": [
+        {
+            "name": "Angel Gonzalez",
+            "email": "angel@projectsaturnstudios.com"
+        }
+    ],
+    "require": {
+        "php": "^8.4|^8.5|^8.6",
+        "ext-vulkan": "^0.7.0",
+        "fabricate/nuts-and-bolts": "^0.7.0",
+        "microscrap/glfw": "^0.7.0",
+        "microscrap/vulkan": "^0.7.0",
+        "scrapyard-io/tubes": "^0.7.0"
+    },
+    "require-dev": {
+        "pestphp/pest": "^4"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../glfw",
+            "options": { "symlink": true }
+        },
+        {
+            "type": "path",
+            "url": "../vulkan",
+            "options": { "symlink": true }
+        },
+        {
+            "type": "path",
+            "url": "../../scrapyard-io/tubes",
+            "options": { "symlink": true }
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Microscrap\\GFX\\Vulkan\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "DeptOfScrapyardRobotics\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "extra": {
+        "scrapyard-io": {
+            "providers": [
+                "Microscrap\\GFX\\Vulkan\\Providers\\VulkanGfxServiceProvider"
+            ]
+        },
+        "branch-alias": {
+            "dev-master": "0.7.x-dev",
+            "dev-main": "0.7.x-dev"
+        }
+    }
+}
