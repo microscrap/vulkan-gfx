@@ -1,5 +1,9 @@
 # OKF log
 
+## 2026-08-11
+
+- **PanelIC PARTIAL + fast B16 pack**: `VulkanHandledFramebuffer` ports ogx/sdl3 dirty tracking (`dirty_regions` / `deferDirty` / coalesce) — headless `flush` emits `FULL` or `PARTIAL`; windowed `flush` returns empty. `packRgbaWords` fixes the old B16 path that treated RGBA low-16 as RGB565. `damageGranularity` pixel when headless; `preservesContentsOnPresent` = `isHeadless()`. `VulkanRenderer2D` wrap fillCircle/drawCircle in `deferDirty`. Pest updated for PARTIAL / RGB565 `f800` / pixel granularity.
+
 ## 2026-08-09
 
 - **FPS**: MetalCanvas vulkan ~32fps — slow `packRgba8Shadow` string concat (~50ms@800×600) + hard FIFO VSync. Pack now `pack('N*')` chunks; ext-vulkan prefers MAILBOX/IMMEDIATE. Trap [fifo-vsync-half-rate](traps/fifo-vsync-half-rate.md).

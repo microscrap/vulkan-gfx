@@ -27,7 +27,7 @@ sources:
 |------|------|
 | `fill($color)` | `VulkanHandledFramebuffer::fill` → CPU shadow (+ present clear_color) |
 | pixels / segments / lines | `setPixel` / `setSegment` into the shadow |
-| circles / ellipses / triangles / roundrects | Midpoint / scanline into the shadow |
+| circles / ellipses / triangles / roundrects | Midpoint / scanline into the shadow; `fillCircle` / `drawCircle` wrap in `VulkanHandledFramebuffer::deferDirty` (one bbox) |
 | Text (`setFont` / `print` / …) | tubes `DrawsText` → `drawPixel` / `fillRect` into Vulkan FB |
 | Present | Not this class — WindowHandler / `framebuffer()->present()` → `Vk::presentRgba8` (or `presentFrame` fallback) |
 

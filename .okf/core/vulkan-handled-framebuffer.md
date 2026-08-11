@@ -1,9 +1,9 @@
 ---
 type: Core
 title: VulkanHandledFramebuffer
-description: Tubes DeferredFramebuffer for driver key vulkan — headless VkInstance + CPU shadow; windowed presents via presentRgba8 (full shadow) or presentFrame fallback.
-tags: [core, framebuffer, deferred, vulkan, headless, window]
-generated: { by: cursor-agent/grok-4.5, at: "2026-08-09T05:00:00Z" }
+description: Tubes DeferredFramebuffer for driver key vulkan — headless VkInstance + CPU shadow with PanelIC dirty/PARTIAL + fast RGB565 pack; windowed presents via presentRgba8 or presentFrame fallback.
+tags: [core, framebuffer, deferred, vulkan, headless, window, panelic, dirty, partial]
+generated: { by: cursor-agent/grok-4.5, at: "2026-08-11T04:30:00Z" }
 status: draft
 sources:
   - id: fb
@@ -24,6 +24,9 @@ sources:
 1. `Vk::createInstance([], 'microscrap/vulkan-gfx')`
 2. CPU shadow of logical pixels
 3. `isHeadless() === true`; `present()` no-op
+4. Dirty tracking → PanelIC `flush()`: `FULL` when whole surface dirty, else `PARTIAL` slices
+5. `damageGranularity()` = pixel; `preservesContentsOnPresent()` = true (shadow retained)
+6. Pack path: `packRgbaWords` (fast ROW_MAJOR B32/`N*` + B16 RGB565/`n*`|`v*`; exotic specs via `PixelStore`)
 
 ## Window-attached
 
@@ -31,8 +34,19 @@ sources:
 
 - Borrows window + swapchain (does **not** destroy them)
 - `isHeadless() === false`
-- `fill` / `setSegment` / `setPixel` update the CPU shadow
+- `fill` / `setSegment` / `setPixel` update the CPU shadow (+ dirty + optional presentOps hint)
 - `present()` → `Vk::presentRgba8` (packed RGBA8 shadow; RLE clearAttachment runs) when available; else `Vk::presentFrame` (clear + ≤3 rects); resizes on `OUT_OF_DATE` / `SUBOPTIMAL`
+- `flush()` returns empty (window present is separate); `damageGranularity()` = wholeSurface
+
+## Dirty / PARTIAL (PanelIC)
+
+Same contract as ogx / sdl3-gfx:
+
+- `dirty_regions`, `dirty_defer_depth`, `deferred_dirty_union`
+- `fill()` → `markAllDirty()`
+- `setPixel` / `setSegment` → inclusive bbox `markDirty`
+- `deferDirty(callable)` unions marks (used by `VulkanRenderer2D` fillCircle / drawCircle)
+- `flush($spec, as_array)` coalesces → FULL or PARTIAL `DumpedBuffer`s
 
 ## App usage
 
@@ -46,6 +60,7 @@ $fb = $window->framebuffer(); // attached
 # Related
 
 - [VulkanWindowHandler](vulkan-window-handler.md)
+- [VulkanRenderer2D](vulkan-renderer-2d.md)
 - [presentFrame rect budget](../traps/present-frame-rect-budget.md)
 - [CPU shadow until GPU store](../traps/cpu-shadow-until-gpu-store.md)
 

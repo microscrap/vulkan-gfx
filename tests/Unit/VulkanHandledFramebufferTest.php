@@ -7,6 +7,7 @@ use ScrapyardIO\Tubes\Contracts\Framebuffers\Enums\BitDepth;
 use ScrapyardIO\Tubes\Contracts\Framebuffers\Enums\Endianness;
 use ScrapyardIO\Tubes\Contracts\Framebuffers\Enums\FramebufferKind;
 use ScrapyardIO\Tubes\Contracts\Framebuffers\Enums\PixelFormat;
+use ScrapyardIO\Tubes\Contracts\Framebuffers\Enums\RenderType;
 use ScrapyardIO\Tubes\Contracts\Framebuffers\FormatSpec;
 use ScrapyardIO\Tubes\Contracts\Framebuffers\ManagedFramebuffer as ManagedFramebufferContract;
 use ScrapyardIO\Tubes\Framebuffers\FramebufferManager;
@@ -71,10 +72,53 @@ test('setPixel and flush round-trip on headless CPU shadow', function () {
 
     expect($buffer->getPixel(1, 0))->toBe(0xFF0000FF);
 
+    $frames = $buffer->flush(vulkanRowMajor(), as_array: true);
+
+    expect($frames)->toHaveCount(1)
+        ->and($frames[0]->render_type)->toBe(RenderType::PARTIAL)
+        ->and($frames[0]->origin_x)->toBe(1)
+        ->and($frames[0]->origin_y)->toBe(0)
+        ->and(strlen($frames[0]->raw_data))->toBe(4)
+        ->and(bin2hex($frames[0]->raw_data))->toBe('ff0000ff');
+});
+
+test('markAllDirty flush emits FULL surface bytes', function () {
+    $buffer = VulkanHandledFramebuffer::sized(4, 2, vulkanRowMajor());
+    $buffer->fill(0x000000FF);
     $bytes = $buffer->flush(vulkanRowMajor());
 
     expect($bytes)->toBeString()
         ->and(strlen($bytes))->toBe(4 * 2 * 4);
+});
+
+test('flush to RGB565 packs RGBA words correctly and emits PARTIAL for local dirty', function () {
+    $buffer = VulkanHandledFramebuffer::sized(8, 8, vulkanRowMajor());
+    $buffer->fill(0x000000FF);
+    $buffer->flush(vulkanRowMajor(), as_array: true);
+
+    $rgb565 = new FormatSpec(
+        PixelFormat::ROW_MAJOR,
+        BitDepth::B16,
+        endianness: Endianness::MSB,
+    );
+
+    $buffer->setSegment(2, 3, 3, 2, 0xFF0000FF);
+    $frames = $buffer->flush($rgb565, as_array: true);
+
+    expect($frames)->toHaveCount(1)
+        ->and($frames[0]->render_type)->toBe(RenderType::PARTIAL)
+        ->and($frames[0]->origin_x)->toBe(2)
+        ->and($frames[0]->origin_y)->toBe(3)
+        ->and($frames[0]->width)->toBe(3)
+        ->and($frames[0]->height)->toBe(2)
+        ->and(bin2hex($frames[0]->raw_data))->toBe(str_repeat('f800', 6));
+});
+
+test('headless damageGranularity is pixel-perfect for PanelIC partial', function () {
+    $buffer = VulkanHandledFramebuffer::sized(16, 16, vulkanRowMajor());
+
+    expect($buffer->damageGranularity()->coversWholeSurface())->toBeFalse()
+        ->and($buffer->damageGranularity()->isPixelPerfect())->toBeTrue();
 });
 
 test('packRgba8Shadow emits big-endian RGBA for presentRgba8', function () {

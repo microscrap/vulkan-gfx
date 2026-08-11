@@ -2,6 +2,8 @@
 
 namespace Microscrap\GFX\Vulkan;
 
+use ScrapyardIO\Tubes\Contracts\Framebuffers\DeferredFramebuffer;
+use ScrapyardIO\Tubes\Contracts\Rendering\ProvisionsHeadlessFramebuffer;
 use ScrapyardIO\Tubes\Rendering\Concerns\DrawsText;
 use ScrapyardIO\Tubes\Rendering\Renderer2D;
 
@@ -12,10 +14,16 @@ use ScrapyardIO\Tubes\Rendering\Renderer2D;
  * setPixel / setSegment. Windowed present uses Vk::presentFrame.
  *
  * Text uses tubes {@see DrawsText} (ClassicFont + GFXFont registry via setFont).
+ * PanelIC: {@see provisionHeadlessFramebuffer()} — present flushes to IC FormatSpec.
  */
-class VulkanRenderer2D extends Renderer2D
+class VulkanRenderer2D extends Renderer2D implements ProvisionsHeadlessFramebuffer
 {
     use DrawsText;
+
+    public function provisionHeadlessFramebuffer(int $width, int $height): DeferredFramebuffer
+    {
+        return VulkanHandledFramebuffer::sized($width, $height, VulkanHandledFramebuffer::rgbaSpec());
+    }
 
     public function drawPixel(int $x, int $y, int $color): static
     {
@@ -203,27 +211,36 @@ class VulkanRenderer2D extends Renderer2D
             return $this->drawPixel($x0, $y0, $color);
         }
 
-        $x = 0;
-        $y = $r;
-        $d = 3 - 2 * $r;
+        $draw = function () use ($x0, $y0, $r, $color): void {
+            $x = 0;
+            $y = $r;
+            $d = 3 - 2 * $r;
 
-        while ($y >= $x) {
-            $this->drawPixel($x0 + $x, $y0 + $y, $color);
-            $this->drawPixel($x0 + $y, $y0 + $x, $color);
-            $this->drawPixel($x0 - $x, $y0 + $y, $color);
-            $this->drawPixel($x0 - $y, $y0 + $x, $color);
-            $this->drawPixel($x0 + $x, $y0 - $y, $color);
-            $this->drawPixel($x0 + $y, $y0 - $x, $color);
-            $this->drawPixel($x0 - $x, $y0 - $y, $color);
-            $this->drawPixel($x0 - $y, $y0 - $x, $color);
+            while ($y >= $x) {
+                $this->drawPixel($x0 + $x, $y0 + $y, $color);
+                $this->drawPixel($x0 + $y, $y0 + $x, $color);
+                $this->drawPixel($x0 - $x, $y0 + $y, $color);
+                $this->drawPixel($x0 - $y, $y0 + $x, $color);
+                $this->drawPixel($x0 + $x, $y0 - $y, $color);
+                $this->drawPixel($x0 + $y, $y0 - $x, $color);
+                $this->drawPixel($x0 - $x, $y0 - $y, $color);
+                $this->drawPixel($x0 - $y, $y0 - $x, $color);
 
-            $x++;
-            if ($d > 0) {
-                $y--;
-                $d = $d + 4 * ($x - $y) + 10;
-            } else {
-                $d = $d + 4 * $x + 6;
+                $x++;
+                if ($d > 0) {
+                    $y--;
+                    $d = $d + 4 * ($x - $y) + 10;
+                } else {
+                    $d = $d + 4 * $x + 6;
+                }
             }
+        };
+
+        $fb = $this->framebuffer();
+        if ($fb instanceof VulkanHandledFramebuffer) {
+            $fb->deferDirty($draw);
+        } else {
+            $draw();
         }
 
         return $this;
@@ -238,23 +255,33 @@ class VulkanRenderer2D extends Renderer2D
             return $this->drawPixel($x0, $y0, $color);
         }
 
-        $x = 0;
-        $y = $r;
-        $d = 3 - 2 * $r;
+        $draw = function () use ($x0, $y0, $r, $color): void {
+            $x = 0;
+            $y = $r;
+            $d = 3 - 2 * $r;
 
-        while ($y >= $x) {
-            $this->drawHorizontalLine($x0 - $x, $y0 + $y, $x * 2 + 1, $color);
-            $this->drawHorizontalLine($x0 - $x, $y0 - $y, $x * 2 + 1, $color);
-            $this->drawHorizontalLine($x0 - $y, $y0 + $x, $y * 2 + 1, $color);
-            $this->drawHorizontalLine($x0 - $y, $y0 - $x, $y * 2 + 1, $color);
+            while ($y >= $x) {
+                $this->drawHorizontalLine($x0 - $x, $y0 + $y, $x * 2 + 1, $color);
+                $this->drawHorizontalLine($x0 - $x, $y0 - $y, $x * 2 + 1, $color);
+                $this->drawHorizontalLine($x0 - $y, $y0 + $x, $y * 2 + 1, $color);
+                $this->drawHorizontalLine($x0 - $y, $y0 - $x, $y * 2 + 1, $color);
 
-            $x++;
-            if ($d > 0) {
-                $y--;
-                $d = $d + 4 * ($x - $y) + 10;
-            } else {
-                $d = $d + 4 * $x + 6;
+                $x++;
+                if ($d > 0) {
+                    $y--;
+                    $d = $d + 4 * ($x - $y) + 10;
+                } else {
+                    $d = $d + 4 * $x + 6;
+                }
             }
+        };
+
+        // One dirty bbox for the circle — not one rect per Bresenham hline.
+        $fb = $this->framebuffer();
+        if ($fb instanceof VulkanHandledFramebuffer) {
+            $fb->deferDirty($draw);
+        } else {
+            $draw();
         }
 
         return $this;
