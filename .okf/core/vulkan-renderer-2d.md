@@ -1,7 +1,7 @@
 ---
 type: Core
 title: VulkanRenderer2D
-description: DrawingAPI + DrawsText — borrows VulkanHandledFramebuffer; fill clears CPU shadow
+description: DrawingAPI + DrawsText — borrows VulkanHandledFramebuffer; windowed fill updates live packed RGBA8
 tags: [core, rendering, drawing, vulkan, fonts]
 generated: { by: cursor-agent/grok-4.5, at: "2026-08-09T06:00:00Z" }
 status: draft
@@ -25,9 +25,9 @@ sources:
 
 | Call | Path |
 |------|------|
-| `fill($color)` | `VulkanHandledFramebuffer::fill` → CPU shadow (+ present clear_color) |
-| pixels / segments / lines | `setPixel` / `setSegment` into the shadow |
-| circles / ellipses / triangles / roundrects | Midpoint / scanline into the shadow; `fillCircle` / `drawCircle` wrap in `VulkanHandledFramebuffer::deferDirty` (one bbox) |
+| `fill($color)` | `VulkanHandledFramebuffer::fill` → live packed RGBA8 (+ present clear_color; int shadow only when headless / no `presentRgba8`) |
+| pixels / segments / lines | `setPixel` / `setSegment` into the packed buffer (int shadow skipped on windowed `presentRgba8`) |
+| circles / ellipses / triangles / roundrects | Midpoint / scanline into the FB; `fillCircle` / `drawCircle` wrap in `VulkanHandledFramebuffer::deferDirty` (one bbox) |
 | Text (`setFont` / `print` / …) | tubes `DrawsText` → `drawPixel` / `fillRect` into Vulkan FB |
 | Present | Not this class — WindowHandler / `framebuffer()->present()` → `Vk::presentRgba8` (or `presentFrame` fallback) |
 
@@ -54,13 +54,14 @@ $gfx->fill(0x141820FF)
 $window->present()->pollEvents();
 ```
 
-Windowed present uses full-shadow `presentRgba8` when the extension supports it — see [present-frame-rect-budget](../traps/present-frame-rect-budget.md).
+Windowed present uses live packed `presentRgba8` when the extension supports it — see [present-frame-rect-budget](../traps/present-frame-rect-budget.md) and [Vulkan VSync](vsync.md).
 
 # Related
 
 - Tubes [Rendering](../../scrapyard-io/tubes/.okf/core/rendering.md) / [Fonts](../../scrapyard-io/tubes/.okf/core/fonts.md)
 - [VulkanHandledFramebuffer](vulkan-handled-framebuffer.md)
 - [VulkanWindowHandler](vulkan-window-handler.md)
+- [Vulkan VSync](vsync.md)
 
 [^renderer]: VulkanRenderer2D
 [^draws-text]: DrawsText

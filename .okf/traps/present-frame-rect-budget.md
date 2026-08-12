@@ -17,6 +17,12 @@ ext-vulkan `presentFrame` only supports a clear color plus **three** colored rec
 
 # Guidance
 
-- Prefer `Vk::presentRgba8()` — packs the CPU shadow as RGBA8 and paints horizontal clearAttachment runs (skips clear-color pixels). `VulkanHandledFramebuffer::present()` uses this when available.
-- Keep `presentFrame` + `presentOpsFromShadow()` as a fallback for older extension builds.
-- Circles/text are exact in the shadow path; performance is RLE span count, not a 3-rect hard cap.
+- Prefer `Vk::presentRgba8()` from the **live packed RGBA8** buffer (updated on `fill` / `setSegment` / `setPixel`; full-surface `str_repeat`). Do not re-pack the int shadow every frame. `VulkanHandledFramebuffer::present()` uses this when available.
+- Keep `presentFrame` + `presentOpsFromShadow()` as a fallback for older extension builds (fallback still needs the int shadow).
+- Circles/text are exact in the packed path; performance is RLE span count, not a 3-rect hard cap.
+
+# Related
+
+- [Vulkan VSync](../core/vsync.md)
+- [VulkanHandledFramebuffer](../core/vulkan-handled-framebuffer.md)
+- [FIFO VSync + slow pack](fifo-vsync-half-rate.md)

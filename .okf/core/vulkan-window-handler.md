@@ -38,6 +38,7 @@ sources:
 | `close` | null FB **first**, then `destroyNative` (Metal/ogx ordering) |
 | `destroyNative` | detach input → swapchain → device → surface → window → instance (idempotent; no `glfwTerminate`) |
 | `inputHandler()` | owned `VulkanInputHandler` (attach on boot, detach on destroy) |
+| `setVsync(bool)` | Stores requested vsync. On Darwin, `DarwinCocoaDisplaySync` sets `CAMetalLayer.displaySyncEnabled` once (ext-vulkan `createSwapchain` still has no presentMode arg). Linux: helper no-op. |
 
 # Registration
 
@@ -54,6 +55,8 @@ Window::driver('vulkan')->title('Demo')->size(800, 600)->open();
 - [VulkanHandledFramebuffer](vulkan-handled-framebuffer.md)
 - [VulkanInputHandler](vulkan-input-handler.md)
 - [VulkanGfxServiceProvider](service-provider.md)
+- [Vulkan VSync](vsync.md)
 - [presentFrame rect budget](../traps/present-frame-rect-budget.md)
+- [MoltenVK MAILBOX still vsyncs](../traps/moltenvk-display-sync.md)
 
 [^handler]: VulkanWindowHandler

@@ -25,8 +25,9 @@ Before changing GFX/framebuffer code **for this package**:
 - `VulkanInputHandler` — tubes `InputHandler` over `microscrap/glfw` `Input` (not raw vulkan binding). Wire only via window poll; wrap with tubes `EngineInput`.
 - `VulkanRenderer2D` implements tubes `DrawingAPI` against a borrowed framebuffer (CPU shadow fill).
 - Text: `use DrawsText` (tubes concern) — do not reimplement glyph rasterization in vulkan-gfx.
-- **Headless** = `VkInstance` + CPU shadow. **Windowed** = `attachedTo(window, …, swapchain)`; `present()` → `Vk::presentRgba8` (full shadow) or `presentFrame` ≤3-rect fallback.
-- **FPS**: never pack the CPU shadow with per-pixel string concat; prefer MAILBOX/IMMEDIATE present (ext-vulkan). FIFO + slow frames → ~30fps (see `.okf/traps/fifo-vsync-half-rate.md`).
+- **Headless** = `VkInstance` + CPU shadow. **Windowed** = `attachedTo(window, …, swapchain)`; `present()` → `Vk::presentRgba8` (live packed RGBA8) or `presentFrame` ≤3-rect fallback. Windowed int-shadow loops skipped when `presentRgba8` exists.
+- **FPS**: never pack the CPU shadow with per-pixel string concat; keep a live packed RGBA8 buffer. Prefer MAILBOX/IMMEDIATE present (ext-vulkan). FIFO + slow frames → ~30fps (see `.okf/traps/fifo-vsync-half-rate.md`).
+- **VSync**: `VulkanWindowHandler::setVsync` — Darwin `CAMetalLayer.displaySyncEnabled` in `setVsync` only (not every present). Linux helper is a no-op. VSync OFF + Uncapped must be allowed to exceed the panel refresh.
 - macOS MoltenVK: provider boot re-execs CLI once with `DYLD_LIBRARY_PATH` when needed (`DarwinVulkanLoaderEnv`).
 - Publish tags: `tubes-framebuffers-vulkan`, `tubes-windows-vulkan`.
 - Never model `vulkan` as a PHP Managed `PixelStore` concrete.

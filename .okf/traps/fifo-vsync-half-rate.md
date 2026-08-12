@@ -23,16 +23,18 @@ sources:
 
 # Cause
 
-1. **Slow pack** — old `packRgba8Shadow()` concatenated four `chr()` bytes per pixel (~50ms at 800×600). Fixed with `pack('N*', …)` chunks (~5ms).
-2. **FIFO VSync** — ext-vulkan `createSwapchain` used `VK_PRESENT_MODE_FIFO_KHR`. When a frame exceeds one refresh (~16.6ms @60Hz), acquire/present waits an extra vblank → ~30fps. Same class of bug as cuda-gfx before `swapInterval(0)`.
+1. **Slow pack** — old `packRgba8Shadow()` concatenated four `chr()` bytes per pixel (~50ms at 800×600). Then `pack('N*', …)` chunks (~5–7 ms at 960×720). **Current:** live packed RGBA8 updated on draw (full-surface `str_repeat`); `packRgba8Shadow()` returns that buffer (`packMs` ~0, verified 2026-08-12).
+2. **FIFO VSync** — ext-vulkan `createSwapchain` used `VK_PRESENT_MODE_FIFO_KHR`. When a frame exceeds one refresh, acquire/present waits an extra vblank → ~half rate. Same class of bug as cuda-gfx before `swapInterval(0)`. On Darwin, MAILBOX still vsyncs until [MoltenVK display sync](moltenvk-display-sync.md) runs from `setVsync`.
 
 # Guidance
 
-- Keep shadow packing on `pack()` / binary paths — never per-pixel string concat.
-- ext-vulkan prefers **MAILBOX → IMMEDIATE → FIFO**; sketch `FramePaceNode` owns the 60fps sleep.
+- Keep a live packed RGBA8 buffer — never per-pixel string concat, and do not re-`pack('N*')` the int shadow every present.
+- ext-vulkan prefers **MAILBOX → IMMEDIATE → FIFO**; app `FramePacer` owns numbered caps. VSync OFF + Uncapped must be allowed to exceed the panel refresh.
 - Rebuild/reload **ext-vulkan** after present-mode C changes (`php-io-extensions/vulkan`).
 
 # Related
 
+- [Vulkan VSync](../core/vsync.md)
 - [presentFrame rect budget](present-frame-rect-budget.md)
 - [CPU shadow until GPU store](cpu-shadow-until-gpu-store.md)
+- [MoltenVK MAILBOX still vsyncs](moltenvk-display-sync.md)

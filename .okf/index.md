@@ -21,6 +21,7 @@ Read this index first; open only the concepts needed for the task.
 * [VulkanGfxServiceProvider](core/service-provider.md) - `extendDeferred('vulkan')` + `windows->extend('vulkan')`.
 * [VulkanHandledFramebuffer](core/vulkan-handled-framebuffer.md) - Headless + window-attached Deferred buffer.
 * [VulkanWindowHandler](core/vulkan-window-handler.md) - Tubes WindowHandler (GLFW NO_API WSI).
+* [Vulkan VSync](core/vsync.md) - Darwin CAMetalLayer once; live packed `presentRgba8`. (`draft`)
 * [VulkanInputHandler](core/vulkan-input-handler.md) - Tubes InputHandler; GLFW Input after pollEvents. (`draft`)
 * [VulkanRenderer2D](core/vulkan-renderer-2d.md) - Full DrawingAPI + tubes DrawsText into borrowed FB.
 
@@ -34,7 +35,8 @@ Read this index first; open only the concepts needed for the task.
 * [MoltenVK ICD on macOS](traps/moltenvk-icd-macos.md) - CLI re-exec / DYLD for MoltenVK.
 * [CPU shadow until GPU store](traps/cpu-shadow-until-gpu-store.md) - ext-vulkan 0.7.0 lacks offscreen image APIs.
 * [GLFW duplicate enum cases](traps/glfw-duplicate-enum-cases.md) - PHP 8.4 forbids Enum::CASE on LAST/alias ints. (`draft`)
-* [FIFO VSync + slow pack → ~30fps](traps/fifo-vsync-half-rate.md) - MetalCanvas vulkan HUD half-rate. (`draft`)
+* [FIFO VSync + slow pack → ~30fps](traps/fifo-vsync-half-rate.md) - Historical MetalCanvas half-rate; live packed buffer supersedes chunked `pack('N*')`. (`draft`)
+* [MoltenVK MAILBOX still vsyncs](traps/moltenvk-display-sync.md) - Darwin `CAMetalLayer.displaySyncEnabled` in `setVsync` only. (`draft`)
 
 # Log
 

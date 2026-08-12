@@ -20,11 +20,12 @@ Vulkan companion for ScrapyardIO **tubes 0.7** — registers:
 
 * `VulkanHandledFramebuffer` extends `DeferredFramebuffer` (not Managed / not `PixelStore`)
 * **Headless** — `VkInstance` + CPU shadow canvas (**no window required**)
-* **Windowed** — `Window::driver('vulkan')->…->open()`; `attachedTo` + `presentFrame` (clear + ≤3 rects from shadow)
+* **Windowed** — `Window::driver('vulkan')->…->open()`; `attachedTo` + `Vk::presentRgba8` (live packed RGBA8) with `presentFrame` (clear + ≤3 rects) as fallback
+* **`setVsync(bool)`** — Darwin `CAMetalLayer.displaySyncEnabled` in `setVsync` only (Linux no-op). VSync OFF + Uncapped must be allowed to exceed the panel refresh.
 * **`VulkanRenderer2D`** — full `DrawingAPI` + tubes `DrawsText` into the borrowed Vulkan framebuffer
 * Factory keys via `extendDeferred` + `$windows->extend` — publish tags `tubes-framebuffers-vulkan` / `tubes-windows-vulkan`
 
-> **Note:** ext-vulkan **0.7.0** has no offscreen image/readback APIs yet (Metal-gfx uses `MTLTexture`). Headless pixels live in a PHP shadow; windowed present uses `Vk::presentFrame` rect slots until a richer GPU store lands.
+> **Note:** ext-vulkan **0.7.0** has no offscreen image/readback APIs yet (Metal-gfx uses `MTLTexture`). Headless pixels live in a PHP int shadow. Windowed present prefers `Vk::presentRgba8` from a live packed RGBA8 buffer (full-surface `str_repeat`; skip per-frame `pack('N*')` of the int shadow). `presentFrame` rect slots remain the fallback.
 
 ## Requirements
 

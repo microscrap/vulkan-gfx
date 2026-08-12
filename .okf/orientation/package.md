@@ -16,6 +16,7 @@ status: draft
 | Requires | `ext-vulkan`, `ext-glfw` (via glfw), `microscrap/vulkan`, `microscrap/glfw`, `scrapyard-io/tubes`, `fabricate/nuts-and-bolts` |
 | Namespace | `Microscrap\GFX\Vulkan\` |
 | Role | Deferred `VulkanHandledFramebuffer` + `VulkanWindowHandler` (GLFW NO_API WSI) + `VulkanInputHandler` + `VulkanRenderer2D` |
+| VSync | `setVsync` — Darwin `CAMetalLayer.displaySyncEnabled` once; Linux no-op. Windowed present is live packed `presentRgba8`. |
 
 # Lanes / factories
 

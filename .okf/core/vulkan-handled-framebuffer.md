@@ -34,8 +34,8 @@ sources:
 
 - Borrows window + swapchain (does **not** destroy them)
 - `isHeadless() === false`
-- `fill` / `setSegment` / `setPixel` update the CPU shadow (+ dirty + optional presentOps hint)
-- `present()` → `Vk::presentRgba8` (packed RGBA8 shadow; RLE clearAttachment runs) when available; else `Vk::presentFrame` (clear + ≤3 rects); resizes on `OUT_OF_DATE` / `SUBOPTIMAL`
+- `fill` / `setSegment` / `setPixel` keep a live packed RGBA8 buffer for `presentRgba8`. Windowed path skips the int shadow when `presentRgba8` exists (dump/getPixel stay headless). Full-surface fills use `array_fill` / `str_repeat`.
+- `present()` → `Vk::presentRgba8` (packed RGBA8; RLE clearAttachment runs) when available; else `Vk::presentFrame` (clear + ≤3 rects); resizes on `OUT_OF_DATE` / `SUBOPTIMAL`
 - `flush()` returns empty (window present is separate); `damageGranularity()` = wholeSurface
 
 ## Dirty / PARTIAL (PanelIC)
@@ -61,6 +61,7 @@ $fb = $window->framebuffer(); // attached
 
 - [VulkanWindowHandler](vulkan-window-handler.md)
 - [VulkanRenderer2D](vulkan-renderer-2d.md)
+- [Vulkan VSync](vsync.md)
 - [presentFrame rect budget](../traps/present-frame-rect-budget.md)
 - [CPU shadow until GPU store](../traps/cpu-shadow-until-gpu-store.md)
 

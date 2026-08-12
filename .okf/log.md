@@ -1,5 +1,10 @@
 # OKF log
 
+## 2026-08-12
+
+- **VSync toggle**: `VulkanWindowHandler::setVsync` stores the requested flag. On Darwin, `DarwinCocoaDisplaySync` flips `CAMetalLayer.displaySyncEnabled` once (not every present) so MAILBOX/FIFO cannot floor Uncapped at the panel. Linux is a no-op. ext-vulkan `createSwapchain` still has no presentMode argument. Trap [moltenvk-display-sync](traps/moltenvk-display-sync.md).
+- **VSync core**: [Vulkan VSync](core/vsync.md) — Darwin layer flag in `setVsync` only; live packed `presentRgba8` (`packMs` ~0, Uncapped menu 127–169 Hz on a 120 Hz panel, verified 2026-08-12).
+
 ## 2026-08-11
 
 - **PanelIC PARTIAL + fast B16 pack**: `VulkanHandledFramebuffer` ports ogx/sdl3 dirty tracking (`dirty_regions` / `deferDirty` / coalesce) — headless `flush` emits `FULL` or `PARTIAL`; windowed `flush` returns empty. `packRgbaWords` fixes the old B16 path that treated RGBA low-16 as RGB565. `damageGranularity` pixel when headless; `preservesContentsOnPresent` = `isHeadless()`. `VulkanRenderer2D` wrap fillCircle/drawCircle in `deferDirty`. Pest updated for PARTIAL / RGB565 `f800` / pixel granularity.

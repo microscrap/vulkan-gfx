@@ -42,6 +42,9 @@ class VulkanHandledFramebuffer extends DeferredFramebuffer
     /** @var array<int, int> logical pixel colors (0xRRGGBBAA) */
     protected array $shadow = [];
 
+    /** Packed RGBA8 bytes kept in lockstep with {@see $shadow} for presentRgba8. */
+    protected string $packedRgba8 = '';
+
     /** Last fill color used as presentFrame clear (0xRRGGBBAA). */
     protected int $clear_color = 0;
 
@@ -85,6 +88,7 @@ class VulkanHandledFramebuffer extends DeferredFramebuffer
         }
 
         $this->shadow = array_fill(0, $width * $height, 0);
+        $this->packedRgba8 = str_repeat("\0\0\0\0", $width * $height);
         $this->native_window = $attach_to;
         $this->swapchain = $swapchain;
         $this->owns_instance = $owns_instance;
@@ -196,7 +200,11 @@ class VulkanHandledFramebuffer extends DeferredFramebuffer
      */
     public function fill(int $color): static
     {
-        $this->shadow = array_fill(0, $this->width * $this->height, $color);
+        $n = $this->width * $this->height;
+        if ($this->writesCpuShadow()) {
+            $this->shadow = array_fill(0, $n, $color);
+        }
+        $this->packedRgba8 = str_repeat(pack('N', $color), $n);
         $this->clear_color = $color;
         $this->present_ops = [];
         $this->markAllDirty();
@@ -319,7 +327,8 @@ class VulkanHandledFramebuffer extends DeferredFramebuffer
             return $this;
         }
 
-        $this->shadow[($y * $this->width) + $x] = $value;
+        $this->writeShadowPixel($x, $y, $value);
+        $this->writePackedPixel($x, $y, $value);
         $this->queuePresentOp($x, $y, 1, 1, $value);
         $this->markDirty($x, $y, $x, $y);
 
@@ -343,12 +352,8 @@ class VulkanHandledFramebuffer extends DeferredFramebuffer
             return $this;
         }
 
-        for ($py = $y0; $py < $y1; $py++) {
-            for ($px = $x0; $px < $x1; $px++) {
-                $this->shadow[($py * $this->width) + $px] = $color;
-            }
-        }
-
+        $this->writeShadowRect($x0, $y0, $x1, $y1, $color);
+        $this->writePackedRect($x0, $y0, $cw, $ch, $color);
         $this->queuePresentOp($x0, $y0, $cw, $ch, $color);
         $this->markDirty($x0, $y0, $x1 - 1, $y1 - 1);
 
@@ -845,20 +850,21 @@ class VulkanHandledFramebuffer extends DeferredFramebuffer
     }
 
     /**
-     * Pack shadow ints (0xRRGGBBAA) to RGBA8 bytes for {@see Vk::presentRgba8()}.
-     *
-     * Uses {@see pack()} — per-pixel string concat was tens of ms at 800×600 and
-     * combined with FIFO VSync locked MetalCanvas near ~30fps.
+     * Return live packed RGBA8. Rebuild from the int shadow only if the byte
+     * buffer is the wrong size (headless / first frame).
      */
     protected function packRgba8Shadow(): string
     {
+        $expected = $this->width * $this->height * 4;
+        if ($expected > 0 && strlen($this->packedRgba8) === $expected) {
+            return $this->packedRgba8;
+        }
+
         $n = $this->width * $this->height;
         if ($n < 1) {
             return '';
         }
 
-        // Big-endian uint32 == R,G,B,A byte order for 0xRRGGBBAA.
-        // Chunk to avoid enormous splat argument lists on large canvases.
         $chunk = 16384;
         if ($n <= $chunk) {
             return pack('N*', ...$this->shadow);
@@ -869,7 +875,81 @@ class VulkanHandledFramebuffer extends DeferredFramebuffer
             $bytes .= pack('N*', ...array_slice($this->shadow, $i, $chunk));
         }
 
+        $this->packedRgba8 = $bytes;
+
         return $bytes;
+    }
+
+    protected function writesCpuShadow(): bool
+    {
+        return $this->isHeadless() || ! method_exists(Vk::class, 'presentRgba8');
+    }
+
+    protected function writeShadowPixel(int $x, int $y, int $color): void
+    {
+        if (! $this->writesCpuShadow()) {
+            return;
+        }
+
+        $this->shadow[($y * $this->width) + $x] = $color;
+    }
+
+    protected function writeShadowRect(int $x0, int $y0, int $x1, int $y1, int $color): void
+    {
+        if (! $this->writesCpuShadow()) {
+            return;
+        }
+
+        $cw = $x1 - $x0;
+        $ch = $y1 - $y0;
+        $n = $this->width * $this->height;
+
+        if ($x0 === 0 && $y0 === 0 && $cw === $this->width && $ch === $this->height) {
+            $this->shadow = array_fill(0, $n, $color);
+
+            return;
+        }
+
+        $w = $this->width;
+        for ($py = $y0; $py < $y1; $py++) {
+            $row = $py * $w;
+            for ($px = $x0; $px < $x1; $px++) {
+                $this->shadow[$row + $px] = $color;
+            }
+        }
+    }
+
+    protected function writePackedPixel(int $x, int $y, int $color): void
+    {
+        $pixel = pack('N', $color);
+        $off = (($y * $this->width) + $x) * 4;
+        $this->packedRgba8[$off] = $pixel[0];
+        $this->packedRgba8[$off + 1] = $pixel[1];
+        $this->packedRgba8[$off + 2] = $pixel[2];
+        $this->packedRgba8[$off + 3] = $pixel[3];
+    }
+
+    protected function writePackedRect(int $x0, int $y0, int $cw, int $ch, int $color): void
+    {
+        $n = $this->width * $this->height;
+        $pixel = pack('N', $color);
+
+        if ($x0 === 0 && $y0 === 0 && $cw === $this->width && $ch === $this->height) {
+            $this->packedRgba8 = str_repeat($pixel, $n);
+
+            return;
+        }
+
+        $row = str_repeat($pixel, $cw);
+        $rowBytes = $cw * 4;
+        $stride = $this->width * 4;
+
+        for ($py = $y0; $py < $y0 + $ch; $py++) {
+            $off = ($py * $stride) + ($x0 * 4);
+            for ($i = 0; $i < $rowBytes; $i++) {
+                $this->packedRgba8[$off + $i] = $row[$i];
+            }
+        }
     }
 
     /**

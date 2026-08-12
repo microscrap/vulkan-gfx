@@ -52,6 +52,10 @@ class VulkanWindowHandler extends WindowHandler
 
     protected ?VkSwapchain $swapchain = null;
 
+    protected bool $vsync = true;
+
+    protected bool $vsyncPushed = false;
+
     public function __construct(string $title, int $width, int $height)
     {
         parent::__construct($title, $width, $height);
@@ -289,6 +293,28 @@ class VulkanWindowHandler extends WindowHandler
     public function vkSwapchain(): ?VkSwapchain
     {
         return $this->swapchain;
+    }
+
+    /**
+     * Present-mode toggle. ext-vulkan {@see Vk::createSwapchain} has no presentMode argument yet.
+     * On Darwin, CAMetalLayer.displaySyncEnabled is set once here (Linux: Darwin helper is a no-op).
+     */
+    public function setVsync(bool $on): static
+    {
+        if ($this->vsync === $on && $this->vsyncPushed) {
+            return $this;
+        }
+
+        $this->vsync = $on;
+        $this->vsyncPushed = true;
+        DarwinCocoaDisplaySync::apply($this->native_window, $on);
+
+        return $this;
+    }
+
+    public function vsync(): bool
+    {
+        return $this->vsync;
     }
 
     /**
